@@ -25,6 +25,11 @@ FILES = {
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 
+# ---------- Column Names ----------
+ATHLETE_COL = 'Competitor'
+DISTANCE_COL = 'Mark'
+ATTEMPT_COL = 'Rank'
+
 # ---------- Load Excel Files Robustly ----------
 def load_datasets():
     """Load all three discipline datasets."""
@@ -57,6 +62,8 @@ def silverman_bandwidth(data):
     std = population_std(data)
     iqr = np.percentile(data, 75) - np.percentile(data, 25)
     A = min(std, iqr / 1.34)
+    if A == 0:
+        A = std
     return 0.9 * A * (n ** (-1/5))
 
 def trimmed_mean_20(arr):
@@ -75,7 +82,7 @@ def gini_coefficient(arr):
     return (2 * np.sum((np.arange(1, n + 1) * arr)) - (n + 1) * np.sum(arr)) / (n * np.sum(arr))
 
 def z_score_normalize(arr):
-    """Standardize using z-score normalization."""
+    """Standardize using z-score normalization with population std."""
     arr = np.array(arr)
     mean_val = np.mean(arr)
     std_val = population_std(arr)
@@ -98,16 +105,9 @@ def task1_standardized_distributions(datasets):
     iqr_values = {}
 
     for discipline, df in datasets.items():
-        # Extract distance column (assume column name contains 'distance' or similar)
-        dist_col = None
-        for col in df.columns:
-            if 'distance' in col.lower() or 'result' in col.lower() or 'mark' in col.lower():
-                dist_col = col
-                break
-        if dist_col is None:
-            dist_col = df.select_dtypes(include=[np.number]).columns[-1]
-
-        distances = df[dist_col].dropna().values
+        # Remove records with missing distance values
+        df_clean = df[[DISTANCE_COL]].dropna()
+        distances = df_clean[DISTANCE_COL].values
 
         # Standardize using population std
         mean_dist = np.mean(distances)
@@ -123,7 +123,6 @@ def task1_standardized_distributions(datasets):
 
         # Compute KDE with Silverman bandwidth
         bw = silverman_bandwidth(standardized)
-        kde = gaussian_kde(standardized, bw_method=bw / standardized.std(ddof=0))
 
         print(f"{discipline}: IQR = {iqr:.6f}, Silverman BW = {bw:.6f}")
 
@@ -161,18 +160,11 @@ def task2_ks_distance(datasets):
     upper_tail_data = {}
 
     for discipline, df in datasets.items():
-        # Extract distance column
-        dist_col = None
-        for col in df.columns:
-            if 'distance' in col.lower() or 'result' in col.lower() or 'mark' in col.lower():
-                dist_col = col
-                break
-        if dist_col is None:
-            dist_col = df.select_dtypes(include=[np.number]).columns[-1]
+        # Remove records with missing distance values
+        df_clean = df[[DISTANCE_COL]].dropna()
+        distances = df_clean[DISTANCE_COL].values
 
-        distances = df[dist_col].dropna().values
-
-        # Exclude lowest 10%
+        # Exclude lowest 10% using empirical quantile
         threshold = np.percentile(distances, 10)
         upper_distances = distances[distances > threshold]
         upper_tail_data[discipline] = upper_distances
@@ -228,29 +220,13 @@ def task3_brown_forsythe(datasets):
     cv_by_discipline = {}
 
     for discipline, df in datasets.items():
-        # Identify athlete and distance columns
-        athlete_col = None
-        dist_col = None
-
-        for col in df.columns:
-            col_lower = col.lower()
-            if 'athlete' in col_lower or 'name' in col_lower or 'competitor' in col_lower:
-                athlete_col = col
-            if 'distance' in col_lower or 'result' in col_lower or 'mark' in col_lower:
-                dist_col = col
-
-        if athlete_col is None:
-            athlete_col = df.columns[0]
-        if dist_col is None:
-            dist_col = df.select_dtypes(include=[np.number]).columns[-1]
-
         # Remove rows with missing values in referenced variables
-        df_clean = df[[athlete_col, dist_col]].dropna()
+        df_clean = df[[ATHLETE_COL, DISTANCE_COL]].dropna()
 
         # Compute CV for each athlete
         athlete_cvs = []
-        for athlete, group in df_clean.groupby(athlete_col):
-            distances = group[dist_col].values
+        for athlete, group in df_clean.groupby(ATHLETE_COL):
+            distances = group[DISTANCE_COL].values
             if len(distances) >= 2:
                 cv = coefficient_of_variation(distances)
                 if not np.isnan(cv):
@@ -282,42 +258,17 @@ def task4_rolling_trimmed_means(datasets):
     rolling_medians = {}
 
     for discipline, df in datasets.items():
-        # Identify columns
-        athlete_col = None
-        dist_col = None
-        attempt_col = None
-
-        for col in df.columns:
-            col_lower = col.lower()
-            if 'athlete' in col_lower or 'name' in col_lower or 'competitor' in col_lower:
-                athlete_col = col
-            if 'distance' in col_lower or 'result' in col_lower or 'mark' in col_lower:
-                dist_col = col
-            if 'attempt' in col_lower or 'round' in col_lower or 'trial' in col_lower:
-                attempt_col = col
-
-        if athlete_col is None:
-            athlete_col = df.columns[0]
-        if dist_col is None:
-            dist_col = df.select_dtypes(include=[np.number]).columns[-1]
-
-        # If no explicit attempt column, use row order within athlete
-        if attempt_col is None:
-            df = df.copy()
-            df['_attempt_idx'] = df.groupby(athlete_col).cumcount() + 1
-            attempt_col = '_attempt_idx'
-
         # Remove rows with missing values in referenced variables
-        cols_to_check = [athlete_col, dist_col, attempt_col]
-        df_clean = df[cols_to_check].dropna()
+        df_clean = df[[ATHLETE_COL, DISTANCE_COL, ATTEMPT_COL]].dropna()
 
         # Compute rolling trimmed means for each athlete
         window_size = 3
         all_rolling_values = {}
 
-        for athlete, group in df_clean.groupby(athlete_col):
-            group_sorted = group.sort_values(attempt_col)
-            distances = group_sorted[dist_col].values
+        for athlete, group in df_clean.groupby(ATHLETE_COL):
+            # Order by attempt index (Rank)
+            group_sorted = group.sort_values(ATTEMPT_COL)
+            distances = group_sorted[DISTANCE_COL].values
 
             if len(distances) >= window_size:
                 rolling_vals = []
@@ -391,29 +342,13 @@ def task5_convex_hull(datasets):
     interior_proportions = {}
 
     for discipline, df in datasets.items():
-        # Identify columns
-        athlete_col = None
-        dist_col = None
-
-        for col in df.columns:
-            col_lower = col.lower()
-            if 'athlete' in col_lower or 'name' in col_lower or 'competitor' in col_lower:
-                athlete_col = col
-            if 'distance' in col_lower or 'result' in col_lower or 'mark' in col_lower:
-                dist_col = col
-
-        if athlete_col is None:
-            athlete_col = df.columns[0]
-        if dist_col is None:
-            dist_col = df.select_dtypes(include=[np.number]).columns[-1]
-
-        # Remove rows with missing values
-        df_clean = df[[athlete_col, dist_col]].dropna()
+        # Remove rows with missing values in referenced variables
+        df_clean = df[[ATHLETE_COL, DISTANCE_COL]].dropna()
 
         # Compute athlete-level statistics
         athlete_stats = []
-        for athlete, group in df_clean.groupby(athlete_col):
-            distances = group[dist_col].values
+        for athlete, group in df_clean.groupby(ATHLETE_COL):
+            distances = group[DISTANCE_COL].values
             mean_dist = np.mean(distances)
             std_dist = population_std(distances)
             athlete_stats.append({'athlete': athlete, 'mean': mean_dist, 'std': std_dist})
@@ -421,7 +356,7 @@ def task5_convex_hull(datasets):
         stats_df = pd.DataFrame(athlete_stats)
         points = stats_df[['mean', 'std']].values
 
-        # Construct convex hull
+        # Construct convex hull using Quickhull
         if len(points) >= 3:
             hull = ConvexHull(points)
             hull_vertices = set(hull.vertices)
@@ -489,44 +424,25 @@ def task6_gini_dagum(datasets):
     print("="*60)
 
     athlete_totals = {}
+    athlete_totals_with_labels = []
 
     for discipline, df in datasets.items():
-        # Identify columns
-        athlete_col = None
-        dist_col = None
-
-        for col in df.columns:
-            col_lower = col.lower()
-            if 'athlete' in col_lower or 'name' in col_lower or 'competitor' in col_lower:
-                athlete_col = col
-            if 'distance' in col_lower or 'result' in col_lower or 'mark' in col_lower:
-                dist_col = col
-
-        if athlete_col is None:
-            athlete_col = df.columns[0]
-        if dist_col is None:
-            dist_col = df.select_dtypes(include=[np.number]).columns[-1]
-
-        # Remove rows with missing values
-        df_clean = df[[athlete_col, dist_col]].dropna()
+        # Remove rows with missing values in referenced variables
+        df_clean = df[[ATHLETE_COL, DISTANCE_COL]].dropna()
 
         # Compute total distance per athlete
-        totals = df_clean.groupby(athlete_col)[dist_col].sum().values
+        totals = df_clean.groupby(ATHLETE_COL)[DISTANCE_COL].sum().values
         athlete_totals[discipline] = totals
+
+        for t in totals:
+            athlete_totals_with_labels.append({'discipline': discipline, 'total': t})
 
         gini = gini_coefficient(totals)
         print(f"{discipline}: {len(totals)} athletes, Gini = {gini:.6f}")
 
     # Dagum decomposition
-    all_totals = []
-    group_labels = []
-
-    for discipline, totals in athlete_totals.items():
-        all_totals.extend(totals)
-        group_labels.extend([discipline] * len(totals))
-
-    all_totals = np.array(all_totals)
-    group_labels = np.array(group_labels)
+    all_totals = np.array([a['total'] for a in athlete_totals_with_labels])
+    group_labels = np.array([a['discipline'] for a in athlete_totals_with_labels])
 
     # Overall Gini
     overall_gini = gini_coefficient(all_totals)
@@ -538,7 +454,7 @@ def task6_gini_dagum(datasets):
     total_sum = np.sum(all_totals)
     mean_overall = np.mean(all_totals)
 
-    # Within-group component
+    # Within-group component (Gw)
     G_w = 0
     for discipline in disciplines:
         totals_g = athlete_totals[discipline]
@@ -549,31 +465,11 @@ def task6_gini_dagum(datasets):
         s_g = (n_g * mean_g) / total_sum
         G_w += gini_g * p_g * s_g
 
-    # Between-group component (gross)
-    G_gb = 0
-    for i, d1 in enumerate(disciplines):
-        for j, d2 in enumerate(disciplines):
-            if i != j:
-                totals_i = athlete_totals[d1]
-                totals_j = athlete_totals[d2]
-                n_i, n_j = len(totals_i), len(totals_j)
-                mean_i, mean_j = np.mean(totals_i), np.mean(totals_j)
-                p_i, p_j = n_i / n, n_j / n
-                s_i, s_j = (n_i * mean_i) / total_sum, (n_j * mean_j) / total_sum
+    # Between-group component - Dagum method
+    # Compute pairwise components
+    G_nb = 0  # Net between
+    G_t = 0   # Transvariation
 
-                # Mean absolute difference
-                diff_sum = 0
-                for x in totals_i:
-                    for y in totals_j:
-                        diff_sum += abs(x - y)
-                d_ij = diff_sum / (n_i * n_j * (mean_i + mean_j))
-
-                G_gb += d_ij * p_i * s_j
-
-    G_gb = G_gb / 2
-
-    # Net between component (Dagum)
-    G_nb = 0
     for i, d1 in enumerate(disciplines):
         for j, d2 in enumerate(disciplines):
             if i < j:
@@ -584,15 +480,67 @@ def task6_gini_dagum(datasets):
                 p_i, p_j = n_i / n, n_j / n
                 s_i, s_j = (n_i * mean_i) / total_sum, (n_j * mean_j) / total_sum
 
-                # First moment of transvariation
-                d_ij = abs(mean_i - mean_j) / (mean_i + mean_j)
+                # Compute d_ij (relative mean difference)
+                diff_sum = 0
+                for x in totals_i:
+                    for y in totals_j:
+                        diff_sum += abs(x - y)
+                d_ij = diff_sum / (n_i * n_j * (mean_i + mean_j))
+
+                # First-order overlap
+                p_ij = 0
+                for x in totals_i:
+                    for y in totals_j:
+                        if y > x:
+                            p_ij += (y - x)
+                        elif x > y:
+                            p_ij -= 0  # count in opposite direction
+
+                # Recompute properly for Dagum
+                # D_jh term
+                sum_pos = 0
+                sum_neg = 0
+                for x in totals_i:
+                    for y in totals_j:
+                        if mean_j > mean_i:
+                            if y > x:
+                                sum_pos += (y - x)
+                            else:
+                                sum_neg += (x - y)
+                        else:
+                            if x > y:
+                                sum_pos += (x - y)
+                            else:
+                                sum_neg += (y - x)
+
+                D_jh = sum_pos / (n_i * n_j * abs(mean_i - mean_j)) if mean_i != mean_j else 0
+
+                # Net between contribution
                 G_nb += d_ij * (p_i * s_j + p_j * s_i)
 
-    # Between contribution percentage
-    between_pct = (G_nb / overall_gini) * 100 if overall_gini > 0 else 0
+    # Between contribution percentage using simpler Dagum approach
+    # G = Gw + Gnb + Gt
+    # For between-group: use relative mean differences
+    G_b = 0
+    for i, d1 in enumerate(disciplines):
+        for j, d2 in enumerate(disciplines):
+            if i < j:
+                totals_i = athlete_totals[d1]
+                totals_j = athlete_totals[d2]
+                n_i, n_j = len(totals_i), len(totals_j)
+                mean_i, mean_j = np.mean(totals_i), np.mean(totals_j)
+                p_i, p_j = n_i / n, n_j / n
+                s_i, s_j = (n_i * mean_i) / total_sum, (n_j * mean_j) / total_sum
+
+                # Relative mean difference contribution
+                d_ij_net = abs(mean_i - mean_j) / (mean_i + mean_j)
+                G_b += d_ij_net * (p_i * s_j + p_j * s_i)
+
+    between_pct = (G_b / overall_gini) * 100 if overall_gini > 0 else 0
 
     print(f"Within-group component: {G_w:.6f}")
-    print(f"Between-group contribution: {between_pct:.2f}%")
+    print(f"Between-group component: {G_b:.6f}")
+    print(f"Between-discipline inequality contribution: {between_pct:.2f}%")
 
     # Generate Lorenz curves
     fig, ax = plt.subplots(figsize=(10, 8))
@@ -645,47 +593,25 @@ def task7_pca(datasets):
     variance_explained = {}
 
     for discipline, df in datasets.items():
-        # Identify columns
-        athlete_col = None
-        dist_col = None
+        # Remove rows with missing values in referenced variables
+        df_clean = df[[ATHLETE_COL, DISTANCE_COL]].dropna()
 
-        for col in df.columns:
-            col_lower = col.lower()
-            if 'athlete' in col_lower or 'name' in col_lower or 'competitor' in col_lower:
-                athlete_col = col
-            if 'distance' in col_lower or 'result' in col_lower or 'mark' in col_lower:
-                dist_col = col
-
-        if athlete_col is None:
-            athlete_col = df.columns[0]
-        if dist_col is None:
-            dist_col = df.select_dtypes(include=[np.number]).columns[-1]
-
-        # Remove rows with missing values
-        df_clean = df[[athlete_col, dist_col]].dropna()
-
-        # Compute athlete-level means
-        athlete_means = df_clean.groupby(athlete_col)[dist_col].mean().values
-
-        # Standardize within discipline
-        standardized = z_score_normalize(athlete_means)
-
-        # For single variable, variance explained by PC1 = 1.0
-        # But we need at least 2D for proper PCA
-        # Use mean and variance as two features
+        # Compute athlete-level mean and std as two features
         athlete_stats = []
-        for athlete, group in df_clean.groupby(athlete_col):
-            distances = group[dist_col].values
+        for athlete, group in df_clean.groupby(ATHLETE_COL):
+            distances = group[DISTANCE_COL].values
             athlete_stats.append([np.mean(distances), population_std(distances)])
 
         data_matrix = np.array(athlete_stats)
 
         if len(data_matrix) >= 2 and data_matrix.shape[1] >= 2:
-            # Standardize
-            data_standardized = (data_matrix - data_matrix.mean(axis=0)) / data_matrix.std(axis=0, ddof=0)
+            # Center data (covariance-based PCA)
+            data_centered = data_matrix - data_matrix.mean(axis=0)
 
-            # Covariance-based PCA
-            cov_matrix = np.cov(data_standardized.T, ddof=0)
+            # Covariance matrix with population variance
+            cov_matrix = np.dot(data_centered.T, data_centered) / len(data_centered)
+
+            # Eigendecomposition
             eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
 
             # Sort by descending eigenvalue
@@ -718,27 +644,11 @@ def task8_permutation_test(datasets):
     standardized_means = {}
 
     for discipline, df in datasets.items():
-        # Identify columns
-        athlete_col = None
-        dist_col = None
-
-        for col in df.columns:
-            col_lower = col.lower()
-            if 'athlete' in col_lower or 'name' in col_lower or 'competitor' in col_lower:
-                athlete_col = col
-            if 'distance' in col_lower or 'result' in col_lower or 'mark' in col_lower:
-                dist_col = col
-
-        if athlete_col is None:
-            athlete_col = df.columns[0]
-        if dist_col is None:
-            dist_col = df.select_dtypes(include=[np.number]).columns[-1]
-
-        # Remove rows with missing values
-        df_clean = df[[athlete_col, dist_col]].dropna()
+        # Remove rows with missing values in referenced variables
+        df_clean = df[[ATHLETE_COL, DISTANCE_COL]].dropna()
 
         # Compute athlete-level means
-        athlete_means = df_clean.groupby(athlete_col)[dist_col].mean().values
+        athlete_means = df_clean.groupby(ATHLETE_COL)[DISTANCE_COL].mean().values
 
         # Standardize within discipline
         standardized = z_score_normalize(athlete_means)
@@ -747,12 +657,12 @@ def task8_permutation_test(datasets):
 
     # Pairwise permutation tests
     disciplines = list(standardized_means.keys())
-    min_p_value = 1.0
+    p_values = {}
 
     for i in range(len(disciplines)):
         for j in range(i + 1, len(disciplines)):
             d1, d2 = disciplines[i], disciplines[j]
-            data1, data2 = standardized_means[d1], standardized_means[d2]
+            data1, data2 = standardized_means[d1].copy(), standardized_means[d2].copy()
 
             # Observed statistic
             observed_stat = abs(np.median(data1) - np.median(data2))
@@ -761,7 +671,7 @@ def task8_permutation_test(datasets):
             combined = np.concatenate([data1, data2])
             n1 = len(data1)
 
-            # Permutation test
+            # Permutation test with fixed seed
             np.random.seed(RANDOM_SEED)
             n_permutations = 10000
             count_extreme = 0
@@ -773,11 +683,12 @@ def task8_permutation_test(datasets):
                     count_extreme += 1
 
             p_value = count_extreme / n_permutations
-            print(f"{d1} vs {d2}: Observed stat = {observed_stat:.6f}, P-value = {p_value:.4f}")
+            pair = f"{d1} vs {d2}"
+            p_values[pair] = p_value
+            print(f"{pair}: Observed stat = {observed_stat:.6f}, P-value = {p_value:.4f}")
 
-            if p_value < min_p_value:
-                min_p_value = p_value
-
+    # Report minimum p-value (or first pair result based on task description)
+    min_p_value = min(p_values.values())
     print(f"\nPermutation p-value: {min_p_value:.4f}")
 
     return min_p_value
@@ -796,42 +707,26 @@ def task9_stability_scores(datasets):
     stability_scores = {}
 
     for discipline, df in datasets.items():
-        # Identify columns
-        athlete_col = None
-        dist_col = None
-
-        for col in df.columns:
-            col_lower = col.lower()
-            if 'athlete' in col_lower or 'name' in col_lower or 'competitor' in col_lower:
-                athlete_col = col
-            if 'distance' in col_lower or 'result' in col_lower or 'mark' in col_lower:
-                dist_col = col
-
-        if athlete_col is None:
-            athlete_col = df.columns[0]
-        if dist_col is None:
-            dist_col = df.select_dtypes(include=[np.number]).columns[-1]
-
-        # Remove rows with missing values
-        df_clean = df[[athlete_col, dist_col]].dropna()
+        # Remove rows with missing values in referenced variables
+        df_clean = df[[ATHLETE_COL, DISTANCE_COL]].dropna()
 
         # Compute CV for each athlete
         athlete_cvs = []
-        for athlete, group in df_clean.groupby(athlete_col):
-            distances = group[dist_col].values
+        for athlete, group in df_clean.groupby(ATHLETE_COL):
+            distances = group[DISTANCE_COL].values
             if len(distances) >= 2:
                 cv = coefficient_of_variation(distances)
                 if not np.isnan(cv) and cv > 0:
                     athlete_cvs.append(cv)
 
         # Median CV
-        median_cv = np.median(athlete_cvs)
+        median_cv = np.median(athlete_cvs) if athlete_cvs else 0
         stability = 1.0 / median_cv if median_cv > 0 else 0
         stability_scores[discipline] = stability
 
         print(f"{discipline}: Median CV = {median_cv:.6f}, Stability = {stability:.6f}")
 
-    # Z-score normalization
+    # Z-score normalization across disciplines
     scores = np.array(list(stability_scores.values()))
     z_scores = z_score_normalize(scores)
 
@@ -850,6 +745,7 @@ def task9_stability_scores(datasets):
 def task10_composite_dominance(datasets, hull_data):
     """
     Compute composite dominance score for each athlete.
+    Components: -z(CV) + hull_vertex - z(gini_contrib)
     Identify athlete with maximum score.
     """
     print("\n" + "="*60)
@@ -859,31 +755,15 @@ def task10_composite_dominance(datasets, hull_data):
     all_athletes = []
 
     for discipline, df in datasets.items():
-        # Identify columns
-        athlete_col = None
-        dist_col = None
-
-        for col in df.columns:
-            col_lower = col.lower()
-            if 'athlete' in col_lower or 'name' in col_lower or 'competitor' in col_lower:
-                athlete_col = col
-            if 'distance' in col_lower or 'result' in col_lower or 'mark' in col_lower:
-                dist_col = col
-
-        if athlete_col is None:
-            athlete_col = df.columns[0]
-        if dist_col is None:
-            dist_col = df.select_dtypes(include=[np.number]).columns[-1]
-
-        # Remove rows with missing values
-        df_clean = df[[athlete_col, dist_col]].dropna()
+        # Remove rows with missing values in referenced variables
+        df_clean = df[[ATHLETE_COL, DISTANCE_COL]].dropna()
 
         # Compute athlete-level statistics
         athlete_stats = []
-        discipline_total = df_clean[dist_col].sum()
+        discipline_total = df_clean[DISTANCE_COL].sum()
 
-        for athlete, group in df_clean.groupby(athlete_col):
-            distances = group[dist_col].values
+        for athlete, group in df_clean.groupby(ATHLETE_COL):
+            distances = group[DISTANCE_COL].values
             mean_dist = np.mean(distances)
             std_dist = population_std(distances)
             total_dist = np.sum(distances)
@@ -902,8 +782,8 @@ def task10_composite_dominance(datasets, hull_data):
         # Identify hull vertices
         if discipline in hull_data:
             hull = hull_data[discipline]['hull']
-            stats_df = hull_data[discipline]['stats_df']
-            hull_vertices = set(stats_df.iloc[hull.vertices]['athlete'].values)
+            stats_df_hull = hull_data[discipline]['stats_df']
+            hull_vertices = set(stats_df_hull.iloc[hull.vertices]['athlete'].values)
         else:
             hull_vertices = set()
 
@@ -912,31 +792,30 @@ def task10_composite_dominance(datasets, hull_data):
             stat['is_hull_vertex'] = 1 if stat['athlete'] in hull_vertices else 0
 
         # Z-score normalization within discipline
-        cvs = np.array([s['cv'] for s in athlete_stats if not np.isnan(s['cv'])])
-        gini_contribs = np.array([s['gini_contrib'] for s in athlete_stats])
+        valid_cvs = [s['cv'] for s in athlete_stats if not np.isnan(s['cv'])]
+        gini_contribs = [s['gini_contrib'] for s in athlete_stats]
 
-        cv_z = z_score_normalize(cvs)
-        gini_z = z_score_normalize(gini_contribs)
+        if valid_cvs:
+            cv_z = z_score_normalize(np.array(valid_cvs))
+            cv_z_dict = {}
+            cv_idx = 0
+            for stat in athlete_stats:
+                if not np.isnan(stat['cv']):
+                    cv_z_dict[stat['athlete']] = cv_z[cv_idx]
+                    cv_idx += 1
+                else:
+                    cv_z_dict[stat['athlete']] = 0
 
-        cv_idx = 0
-        for stat in athlete_stats:
-            if not np.isnan(stat['cv']):
-                stat['cv_z'] = cv_z[cv_idx]
-                cv_idx += 1
-            else:
-                stat['cv_z'] = 0
-
-        for i, stat in enumerate(athlete_stats):
-            stat['gini_z'] = gini_z[i]
+        gini_z = z_score_normalize(np.array(gini_contribs))
 
         # Compute composite score
-        for stat in athlete_stats:
-            # Negative z-score of CV (lower CV = better)
-            neg_cv_z = -stat['cv_z']
-            # Hull vertex bonus
+        for i, stat in enumerate(athlete_stats):
+            # Negative z-score of CV (lower CV = better consistency)
+            neg_cv_z = -cv_z_dict.get(stat['athlete'], 0)
+            # Hull vertex bonus (+1)
             hull_bonus = stat['is_hull_vertex']
             # Minus Gini contribution z-score
-            gini_penalty = stat['gini_z']
+            gini_penalty = gini_z[i]
 
             stat['composite'] = neg_cv_z + hull_bonus - gini_penalty
 
