@@ -83,7 +83,7 @@ def gini_coefficient(arr):
 
 def z_score_normalize(arr):
     """Standardize using z-score normalization with population std."""
-    arr = np.array(arr)
+    arr = np.array(arr, dtype=float)
     mean_val = np.mean(arr)
     std_val = population_std(arr)
     if std_val == 0:
@@ -223,7 +223,7 @@ def task3_brown_forsythe(datasets):
         # Remove rows with missing values in referenced variables
         df_clean = df[[ATHLETE_COL, DISTANCE_COL]].dropna()
 
-        # Compute CV for each athlete
+        # Compute CV for each athlete (requires >= 2 observations for meaningful CV)
         athlete_cvs = []
         for athlete, group in df_clean.groupby(ATHLETE_COL):
             distances = group[DISTANCE_COL].values
@@ -417,14 +417,13 @@ def task6_gini_dagum(datasets):
     """
     Compute athlete-level total distance.
     Calculate Gini and decompose using Dagum method.
-    Report between-discipline inequality percentage.
+    Report between-discipline inequality percentage (using gross between-group component).
     """
     print("\n" + "="*60)
     print("TASK 6: Gini Coefficient and Dagum Decomposition")
     print("="*60)
 
     athlete_totals = {}
-    athlete_totals_with_labels = []
 
     for discipline, df in datasets.items():
         # Remove rows with missing values in referenced variables
@@ -434,112 +433,43 @@ def task6_gini_dagum(datasets):
         totals = df_clean.groupby(ATHLETE_COL)[DISTANCE_COL].sum().values
         athlete_totals[discipline] = totals
 
-        for t in totals:
-            athlete_totals_with_labels.append({'discipline': discipline, 'total': t})
-
         gini = gini_coefficient(totals)
         print(f"{discipline}: {len(totals)} athletes, Gini = {gini:.6f}")
 
     # Dagum decomposition
-    all_totals = np.array([a['total'] for a in athlete_totals_with_labels])
-    group_labels = np.array([a['discipline'] for a in athlete_totals_with_labels])
-
-    # Overall Gini
+    all_totals = np.concatenate(list(athlete_totals.values()))
     overall_gini = gini_coefficient(all_totals)
     print(f"\nOverall Gini: {overall_gini:.6f}")
 
-    # Dagum decomposition components
     disciplines = list(athlete_totals.keys())
     n = len(all_totals)
     total_sum = np.sum(all_totals)
-    mean_overall = np.mean(all_totals)
 
-    # Within-group component (Gw)
-    G_w = 0
-    for discipline in disciplines:
-        totals_g = athlete_totals[discipline]
-        n_g = len(totals_g)
-        mean_g = np.mean(totals_g)
-        gini_g = gini_coefficient(totals_g)
-        p_g = n_g / n
-        s_g = (n_g * mean_g) / total_sum
-        G_w += gini_g * p_g * s_g
-
-    # Between-group component - Dagum method
-    # Compute pairwise components
-    G_nb = 0  # Net between
-    G_t = 0   # Transvariation
-
-    for i, d1 in enumerate(disciplines):
-        for j, d2 in enumerate(disciplines):
+    # Gross between-group component (Ggb) - Dagum method
+    Ggb = 0
+    for i, d_i in enumerate(disciplines):
+        for j, d_j in enumerate(disciplines):
             if i < j:
-                totals_i = athlete_totals[d1]
-                totals_j = athlete_totals[d2]
-                n_i, n_j = len(totals_i), len(totals_j)
-                mean_i, mean_j = np.mean(totals_i), np.mean(totals_j)
+                y_i = athlete_totals[d_i]
+                y_j = athlete_totals[d_j]
+                n_i, n_j = len(y_i), len(y_j)
+                mu_i, mu_j = np.mean(y_i), np.mean(y_j)
                 p_i, p_j = n_i / n, n_j / n
-                s_i, s_j = (n_i * mean_i) / total_sum, (n_j * mean_j) / total_sum
+                s_i = (n_i * mu_i) / total_sum
+                s_j = (n_j * mu_j) / total_sum
 
-                # Compute d_ij (relative mean difference)
+                # Gross between d_ij (mean absolute difference)
                 diff_sum = 0
-                for x in totals_i:
-                    for y in totals_j:
+                for x in y_i:
+                    for y in y_j:
                         diff_sum += abs(x - y)
-                d_ij = diff_sum / (n_i * n_j * (mean_i + mean_j))
+                d_ij = diff_sum / (n_i * n_j * (mu_i + mu_j))
 
-                # First-order overlap
-                p_ij = 0
-                for x in totals_i:
-                    for y in totals_j:
-                        if y > x:
-                            p_ij += (y - x)
-                        elif x > y:
-                            p_ij -= 0  # count in opposite direction
+                Ggb += d_ij * (p_i * s_j + p_j * s_i)
 
-                # Recompute properly for Dagum
-                # D_jh term
-                sum_pos = 0
-                sum_neg = 0
-                for x in totals_i:
-                    for y in totals_j:
-                        if mean_j > mean_i:
-                            if y > x:
-                                sum_pos += (y - x)
-                            else:
-                                sum_neg += (x - y)
-                        else:
-                            if x > y:
-                                sum_pos += (x - y)
-                            else:
-                                sum_neg += (y - x)
+    between_pct = (Ggb / overall_gini) * 100 if overall_gini > 0 else 0
 
-                D_jh = sum_pos / (n_i * n_j * abs(mean_i - mean_j)) if mean_i != mean_j else 0
-
-                # Net between contribution
-                G_nb += d_ij * (p_i * s_j + p_j * s_i)
-
-    # Between contribution percentage using simpler Dagum approach
-    # G = Gw + Gnb + Gt
-    # For between-group: use relative mean differences
-    G_b = 0
-    for i, d1 in enumerate(disciplines):
-        for j, d2 in enumerate(disciplines):
-            if i < j:
-                totals_i = athlete_totals[d1]
-                totals_j = athlete_totals[d2]
-                n_i, n_j = len(totals_i), len(totals_j)
-                mean_i, mean_j = np.mean(totals_i), np.mean(totals_j)
-                p_i, p_j = n_i / n, n_j / n
-                s_i, s_j = (n_i * mean_i) / total_sum, (n_j * mean_j) / total_sum
-
-                # Relative mean difference contribution
-                d_ij_net = abs(mean_i - mean_j) / (mean_i + mean_j)
-                G_b += d_ij_net * (p_i * s_j + p_j * s_i)
-
-    between_pct = (G_b / overall_gini) * 100 if overall_gini > 0 else 0
-
-    print(f"Within-group component: {G_w:.6f}")
-    print(f"Between-group component: {G_b:.6f}")
+    print(f"Gross between-group component (Ggb): {Ggb:.6f}")
     print(f"Between-discipline inequality contribution: {between_pct:.2f}%")
 
     # Generate Lorenz curves
@@ -583,7 +513,8 @@ def task6_gini_dagum(datasets):
 # ---------- Task 7: PCA Analysis ----------
 def task7_pca(datasets):
     """
-    Perform PCA on athlete-level standardized mean distances.
+    Perform PCA on athlete-level standardized mean distances (single variable).
+    With single variable, PC1 explains 100% of variance.
     Report maximum variance explained by PC1.
     """
     print("\n" + "="*60)
@@ -596,34 +527,26 @@ def task7_pca(datasets):
         # Remove rows with missing values in referenced variables
         df_clean = df[[ATHLETE_COL, DISTANCE_COL]].dropna()
 
-        # Compute athlete-level mean and std as two features
-        athlete_stats = []
-        for athlete, group in df_clean.groupby(ATHLETE_COL):
-            distances = group[DISTANCE_COL].values
-            athlete_stats.append([np.mean(distances), population_std(distances)])
+        # Compute athlete-level means
+        athlete_means = df_clean.groupby(ATHLETE_COL)[DISTANCE_COL].mean().values
 
-        data_matrix = np.array(athlete_stats)
+        # Standardize within discipline
+        standardized = z_score_normalize(athlete_means)
 
-        if len(data_matrix) >= 2 and data_matrix.shape[1] >= 2:
-            # Center data (covariance-based PCA)
-            data_centered = data_matrix - data_matrix.mean(axis=0)
+        # Single variable PCA - reshape for matrix operations
+        X = standardized.reshape(-1, 1)
+        X_centered = X - X.mean(axis=0)
 
-            # Covariance matrix with population variance
-            cov_matrix = np.dot(data_centered.T, data_centered) / len(data_centered)
+        # Covariance-based PCA with population variance
+        cov_matrix = np.dot(X_centered.T, X_centered) / len(X_centered)
+        eigenvalues = np.linalg.eigvalsh(cov_matrix)
 
-            # Eigendecomposition
-            eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+        # With single variable, PC1 explains 100% of variance
+        total_var = np.sum(eigenvalues)
+        pc1_var = eigenvalues[0] / total_var if total_var > 0 else 1.0
 
-            # Sort by descending eigenvalue
-            idx = np.argsort(eigenvalues)[::-1]
-            eigenvalues = eigenvalues[idx]
-
-            # Variance explained by PC1
-            total_var = np.sum(eigenvalues)
-            pc1_var = eigenvalues[0] / total_var if total_var > 0 else 0
-
-            variance_explained[discipline] = pc1_var
-            print(f"{discipline}: PC1 variance explained = {pc1_var:.6f}")
+        variance_explained[discipline] = pc1_var
+        print(f"{discipline}: PC1 variance explained = {pc1_var:.6f}")
 
     max_var_explained = max(variance_explained.values())
     print(f"\nMaximum PC1 variance explained: {max_var_explained:.3f}")
@@ -687,7 +610,7 @@ def task8_permutation_test(datasets):
             p_values[pair] = p_value
             print(f"{pair}: Observed stat = {observed_stat:.6f}, P-value = {p_value:.4f}")
 
-    # Report minimum p-value (or first pair result based on task description)
+    # Report minimum p-value
     min_p_value = min(p_values.values())
     print(f"\nPermutation p-value: {min_p_value:.4f}")
 
@@ -710,7 +633,7 @@ def task9_stability_scores(datasets):
         # Remove rows with missing values in referenced variables
         df_clean = df[[ATHLETE_COL, DISTANCE_COL]].dropna()
 
-        # Compute CV for each athlete
+        # Compute CV for each athlete (requires >= 2 observations)
         athlete_cvs = []
         for athlete, group in df_clean.groupby(ATHLETE_COL):
             distances = group[DISTANCE_COL].values
@@ -745,8 +668,9 @@ def task9_stability_scores(datasets):
 def task10_composite_dominance(datasets, hull_data):
     """
     Compute composite dominance score for each athlete.
-    Components: -z(CV) + hull_vertex - z(gini_contrib)
-    Identify athlete with maximum score.
+    Formula: -z(CV) + z(hull_vertex) - z(gini_contrib)
+    All components z-score normalized within discipline.
+    Include athletes with single observations (CV=0).
     """
     print("\n" + "="*60)
     print("TASK 10: Composite Dominance Score")
@@ -757,24 +681,20 @@ def task10_composite_dominance(datasets, hull_data):
     for discipline, df in datasets.items():
         # Remove rows with missing values in referenced variables
         df_clean = df[[ATHLETE_COL, DISTANCE_COL]].dropna()
+        discipline_total = df_clean[DISTANCE_COL].sum()
 
         # Compute athlete-level statistics
         athlete_stats = []
-        discipline_total = df_clean[DISTANCE_COL].sum()
-
         for athlete, group in df_clean.groupby(ATHLETE_COL):
             distances = group[DISTANCE_COL].values
-            mean_dist = np.mean(distances)
-            std_dist = population_std(distances)
             total_dist = np.sum(distances)
-            cv = coefficient_of_variation(distances) if len(distances) >= 2 else np.nan
+            # CV for single observation is 0 (std=0)
+            cv = coefficient_of_variation(distances)
             gini_contrib = total_dist / discipline_total if discipline_total > 0 else 0
 
             athlete_stats.append({
                 'athlete': athlete,
                 'discipline': discipline,
-                'mean': mean_dist,
-                'std': std_dist,
                 'cv': cv,
                 'gini_contrib': gini_contrib
             })
@@ -791,35 +711,27 @@ def task10_composite_dominance(datasets, hull_data):
         for stat in athlete_stats:
             stat['is_hull_vertex'] = 1 if stat['athlete'] in hull_vertices else 0
 
-        # Z-score normalization within discipline
-        valid_cvs = [s['cv'] for s in athlete_stats if not np.isnan(s['cv'])]
-        gini_contribs = [s['gini_contrib'] for s in athlete_stats]
+        # Include ALL athletes (including those with CV=0 from single observation)
+        valid_stats = [s for s in athlete_stats if not np.isnan(s['cv'])]
 
-        if valid_cvs:
-            cv_z = z_score_normalize(np.array(valid_cvs))
-            cv_z_dict = {}
-            cv_idx = 0
-            for stat in athlete_stats:
-                if not np.isnan(stat['cv']):
-                    cv_z_dict[stat['athlete']] = cv_z[cv_idx]
-                    cv_idx += 1
-                else:
-                    cv_z_dict[stat['athlete']] = 0
+        # Z-score normalize ALL components within discipline
+        cvs = np.array([s['cv'] for s in valid_stats])
+        hull_indicators = np.array([s['is_hull_vertex'] for s in valid_stats])
+        gini_contribs = np.array([s['gini_contrib'] for s in valid_stats])
 
-        gini_z = z_score_normalize(np.array(gini_contribs))
+        cv_z = z_score_normalize(cvs)
+        hull_z = z_score_normalize(hull_indicators)
+        gini_z = z_score_normalize(gini_contribs)
 
         # Compute composite score
-        for i, stat in enumerate(athlete_stats):
-            # Negative z-score of CV (lower CV = better consistency)
-            neg_cv_z = -cv_z_dict.get(stat['athlete'], 0)
-            # Hull vertex bonus (+1)
-            hull_bonus = stat['is_hull_vertex']
-            # Minus Gini contribution z-score
-            gini_penalty = gini_z[i]
+        for i, stat in enumerate(valid_stats):
+            stat['cv_z'] = cv_z[i]
+            stat['hull_z'] = hull_z[i]
+            stat['gini_z'] = gini_z[i]
+            # Formula: -z(CV) + z(hull) - z(gini_contrib)
+            stat['composite'] = -cv_z[i] + hull_z[i] - gini_z[i]
 
-            stat['composite'] = neg_cv_z + hull_bonus - gini_penalty
-
-        all_athletes.extend(athlete_stats)
+        all_athletes.extend(valid_stats)
 
     # Find maximum composite score
     max_athlete = max(all_athletes, key=lambda x: x['composite'])
