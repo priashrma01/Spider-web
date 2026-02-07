@@ -132,7 +132,7 @@ print(f"Highest CV type: {max_cv_type} (CV = {max_cv_val:.4f})")
 # ---------- Rank Pokémon by SWSH TotalBST ----------
 rank_df = aligned["SWSH"][["No", "Name", "TotalBST"]].copy()
 rank_df = rank_df.sort_values(
-    by=["TotalBST", "Name"], ascending=[False, True]
+    by=["TotalBST", "No"], ascending=[False, True]
 ).reset_index(drop=True)
 top_pokemon_no = rank_df.iloc[0]["No"]
 print(f"Highest-ranked Pokémon identifier (SWSH): {top_pokemon_no}")
@@ -146,8 +146,9 @@ bst_matrix = np.column_stack(
     [aligned[g]["TotalBST"].values for g in GEN_ORDER]
 )
 bst_range = bst_matrix.max(axis=1) - bst_matrix.min(axis=1)
-min_change_idx = np.argmin(bst_range)
-most_consistent = common_names[min_change_idx]
+min_range_val = bst_range.min()
+candidates = [common_names[i] for i in range(len(common_names)) if bst_range[i] == min_range_val]
+most_consistent = sorted(candidates)[0]
 print(f"Most consistent Pokémon (least BST change): {most_consistent}")
 
 # ---------- Composite Importance Score ----------
