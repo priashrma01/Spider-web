@@ -1,5 +1,5 @@
 # ==========================================
-# Integrated Pokemon Stats Analysis Script
+# Integrated Pokémon Stats Analysis Script
 # Requirements: pandas, numpy, matplotlib, scipy, scikit-learn, openpyxl
 # Input files: pokemon_rs.xlsx, pokemon_bw.xlsx, pokemon_swsh.xlsx
 # Output files: pokemon_bst_boxplot.png, pokemon_stat_corr_heatmap.png,
@@ -20,6 +20,7 @@ from sklearn.decomposition import PCA
 from sklearn.linear_model import LinearRegression
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
+from sklearn.preprocessing import StandardScaler
 
 # ---------- Configuration ----------
 STAT_COLS = ["HP", "Att", "Def", "S.Att", "S.Def", "Spd"]
@@ -28,33 +29,33 @@ FILES = {
     "BW":   "pokemon_bw.xlsx",
     "SWSH": "pokemon_swsh.xlsx",
 }
-GEN_ORDER = ["RS", "BW", "SWSH"]   # earliest to latest
+GEN_ORDER = ["RS", "BW", "SWSH"]   # earliest → latest
 
 # ---------- Load Datasets Robustly ----------
 datasets = {}
 for gen, path in FILES.items():
     df = pd.read_excel(path)
-    # Keep first occurrence per No (base form) to resolve alternate form duplicates
-    df = df.drop_duplicates(subset=["No"], keep="first").reset_index(drop=True)
+    # Keep first occurrence per Name (base form) to remove alternate forms
+    df = df.drop_duplicates(subset=["Name"], keep="first").reset_index(drop=True)
     datasets[gen] = df
 
-# ---------- Align by Pokemon Identifier (No) ----------
-common_nos = (
-    set(datasets["RS"]["No"])
-    & set(datasets["BW"]["No"])
-    & set(datasets["SWSH"]["No"])
+# ---------- Align by Pokémon Identifier (Name) ----------
+common_names = (
+    set(datasets["RS"]["Name"])
+    & set(datasets["BW"]["Name"])
+    & set(datasets["SWSH"]["Name"])
 )
-common_nos = sorted(common_nos)
+common_names = sorted(common_names)
 
 aligned = {}
 for gen in GEN_ORDER:
     df = datasets[gen]
-    df = df[df["No"].isin(common_nos)].copy()
-    df = df.set_index("No").loc[common_nos].reset_index()
+    df = df[df["Name"].isin(common_names)].copy()
+    df = df.set_index("Name").loc[common_names].reset_index()
     aligned[gen] = df
 
-n_aligned = len(common_nos)
-print(f"Pokemon remaining after alignment: {n_aligned}")
+n_aligned = len(common_names)
+print(f"Pokémon remaining after alignment: {n_aligned}")
 
 # ---------- Compute Total Base Stats (BST) per Generation ----------
 for gen in GEN_ORDER:
@@ -66,7 +67,7 @@ bst_latest   = aligned["SWSH"]["TotalBST"].values
 mad_bst = np.mean(np.abs(bst_latest - bst_earliest))
 print(f"Mean absolute difference in total BST (RS vs SWSH): {mad_bst:.4f}")
 
-# ---------- Standardise Base Stats (Pooled Mean and Population Std) ----------
+# ---------- Standardise Base Stats (Pooled Mean & Population Std) ----------
 all_stats = pd.concat(
     [aligned[g][STAT_COLS] for g in GEN_ORDER], ignore_index=True
 )
@@ -98,12 +99,12 @@ r2 = 1 - ss_res / ss_tot
 n_obs = len(y_reg)
 p_vars = X_reg.shape[1]
 adj_r2 = 1 - (1 - r2) * (n_obs - 1) / (n_obs - p_vars - 1)
-print(f"Regression adjusted R-squared: {adj_r2:.4f}")
+print(f"Regression adjusted R²: {adj_r2:.4f}")
 
-# ---------- K-Means Clustering (k=5) on Standardised SWSH Stats ----------
-std_swsh = std_data["SWSH"].values
+# ---------- K-Means Clustering (k=5) on Standardised Stats ----------
+std_combined = std_all.values
 kmeans = KMeans(n_clusters=5, random_state=42, n_init=10)
-cluster_labels = kmeans.fit_predict(std_swsh)
+cluster_labels = kmeans.fit_predict(std_combined)
 
 # Re-assign clusters by ascending centroid total-stat magnitude
 centroid_totals = kmeans.cluster_centers_.sum(axis=1)
@@ -111,12 +112,12 @@ order = np.argsort(centroid_totals)
 label_map = {old: new for new, old in enumerate(order)}
 final_labels = np.array([label_map[l] for l in cluster_labels])
 
-sil_score = silhouette_score(std_swsh, final_labels)
+sil_score = silhouette_score(std_combined, final_labels)
 print(f"Silhouette score (k=5): {sil_score:.4f}")
 
 # ---------- Coefficient of Variation by Primary Type ----------
-# Use SWSH dataset for type; primary type is first type before comma
-type_bst = aligned["SWSH"][["No", "TotalBST"]].copy()
+# Use SWSH dataset for type; primary type = first type before comma
+type_bst = aligned["SWSH"][["Name", "TotalBST"]].copy()
 type_bst["PrimaryType"] = aligned["SWSH"]["Type"].str.split(",").str[0].str.strip()
 
 type_stats = type_bst.groupby("PrimaryType")["TotalBST"].agg(
@@ -128,36 +129,33 @@ max_cv_type = type_stats["cv"].idxmax()
 max_cv_val  = type_stats.loc[max_cv_type, "cv"]
 print(f"Highest CV type: {max_cv_type} (CV = {max_cv_val:.4f})")
 
-# ---------- Rank Pokemon by SWSH TotalBST ----------
-rank_df = aligned["SWSH"][["No", "TotalBST"]].copy()
+# ---------- Rank Pokémon by SWSH TotalBST ----------
+rank_df = aligned["SWSH"][["No", "Name", "TotalBST"]].copy()
 rank_df = rank_df.sort_values(
-    by=["TotalBST", "No"], ascending=[False, True]
+    by=["TotalBST", "Name"], ascending=[False, True]
 ).reset_index(drop=True)
-top_pokemon_id = rank_df.iloc[0]["No"]
-print(f"Highest-ranked Pokemon identifier (SWSH): {top_pokemon_id}")
+top_pokemon_no = rank_df.iloc[0]["No"]
+print(f"Highest-ranked Pokémon identifier (SWSH): {top_pokemon_no}")
 
 # ---------- Pearson Correlation (RS vs SWSH TotalBST) ----------
 pearson_r, _ = sp_stats.pearsonr(bst_earliest, bst_latest)
 print(f"Pearson r (RS vs SWSH TotalBST): {pearson_r:.4f}")
 
-# ---------- Most Consistent Pokemon Across Generations ----------
+# ---------- Most Consistent Pokémon Across Generations ----------
 bst_matrix = np.column_stack(
     [aligned[g]["TotalBST"].values for g in GEN_ORDER]
 )
 bst_range = bst_matrix.max(axis=1) - bst_matrix.min(axis=1)
-# Find minimum range then break ties by ascending No
-min_range_val = bst_range.min()
-candidates = np.where(bst_range == min_range_val)[0]
-# common_nos is already sorted ascending so first candidate has smallest No
-min_change_idx = candidates[0]
-most_consistent_name = aligned["RS"].iloc[min_change_idx]["Name"]
-print(f"Most consistent Pokemon (least BST change): {most_consistent_name}")
+min_change_idx = np.argmin(bst_range)
+most_consistent = common_names[min_change_idx]
+print(f"Most consistent Pokémon (least BST change): {most_consistent}")
 
 # ---------- Composite Importance Score ----------
 # Component 1: absolute PC1 loading
 pc1_loadings = np.abs(pca.components_[0])
 
 # Component 2: absolute standardised regression coefficients
+# Standardise coefficients: coef * std_X / std_y  (but X already standardised)
 # Use beta coefficients directly since X is standardised
 beta_abs = np.abs(reg.coef_)
 
@@ -166,7 +164,7 @@ beta_abs = np.abs(reg.coef_)
 reordered_centroids = kmeans.cluster_centers_[order]
 centroid_range = reordered_centroids.max(axis=0) - reordered_centroids.min(axis=0)
 
-# Normalise each component to 0 to 1
+# Normalise each component to [0, 1]
 def normalise_01(arr):
     mn, mx = arr.min(), arr.max()
     if mx == mn:
@@ -228,7 +226,7 @@ ax.scatter(pc_scores_all[:, 0], pc_scores_all[:, 1],
            alpha=0.4, s=15, c="#4C72B0")
 ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)")
 ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
-ax.set_title("PCA: First Two Principal Components")
+ax.set_title("PCA – First Two Principal Components")
 ax.axhline(0, color="grey", lw=0.5, ls="--")
 ax.axvline(0, color="grey", lw=0.5, ls="--")
 plt.tight_layout()
@@ -236,14 +234,11 @@ plt.savefig("pokemon_pca_scatter.png", dpi=150)
 plt.close()
 
 # ---------- 4. Cluster Scatter (PC1 vs PC2, coloured by cluster) ----------
-# Use SWSH PCA scores to match SWSH clustering scope
-n_swsh = len(common_nos)
-pc_scores_swsh = pc_scores_all[2 * n_swsh:]  # SWSH is the third block
 fig, ax = plt.subplots(figsize=(8, 6))
 palette = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3"]
 for cl in range(5):
     mask = final_labels == cl
-    ax.scatter(pc_scores_swsh[mask, 0], pc_scores_swsh[mask, 1],
+    ax.scatter(pc_scores_all[mask, 0], pc_scores_all[mask, 1],
                alpha=0.45, s=15, c=palette[cl], label=f"Cluster {cl}")
 ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)")
 ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
