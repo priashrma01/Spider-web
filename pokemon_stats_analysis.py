@@ -100,10 +100,10 @@ p_vars = X_reg.shape[1]
 adj_r2 = 1 - (1 - r2) * (n_obs - 1) / (n_obs - p_vars - 1)
 print(f"Regression adjusted R-squared: {adj_r2:.4f}")
 
-# ---------- K-Means Clustering (k=5) on Standardised Stats ----------
-std_combined = std_all.values
+# ---------- K-Means Clustering (k=5) on Standardised SWSH Stats ----------
+std_swsh = std_data["SWSH"].values
 kmeans = KMeans(n_clusters=5, random_state=42, n_init=10)
-cluster_labels = kmeans.fit_predict(std_combined)
+cluster_labels = kmeans.fit_predict(std_swsh)
 
 # Re-assign clusters by ascending centroid total-stat magnitude
 centroid_totals = kmeans.cluster_centers_.sum(axis=1)
@@ -111,7 +111,7 @@ order = np.argsort(centroid_totals)
 label_map = {old: new for new, old in enumerate(order)}
 final_labels = np.array([label_map[l] for l in cluster_labels])
 
-sil_score = silhouette_score(std_combined, final_labels)
+sil_score = silhouette_score(std_swsh, final_labels)
 print(f"Silhouette score (k=5): {sil_score:.4f}")
 
 # ---------- Coefficient of Variation by Primary Type ----------
@@ -236,11 +236,14 @@ plt.savefig("pokemon_pca_scatter.png", dpi=150)
 plt.close()
 
 # ---------- 4. Cluster Scatter (PC1 vs PC2, coloured by cluster) ----------
+# Use SWSH PCA scores to match SWSH clustering scope
+n_swsh = len(common_nos)
+pc_scores_swsh = pc_scores_all[2 * n_swsh:]  # SWSH is the third block
 fig, ax = plt.subplots(figsize=(8, 6))
 palette = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3"]
 for cl in range(5):
     mask = final_labels == cl
-    ax.scatter(pc_scores_all[mask, 0], pc_scores_all[mask, 1],
+    ax.scatter(pc_scores_swsh[mask, 0], pc_scores_swsh[mask, 1],
                alpha=0.45, s=15, c=palette[cl], label=f"Cluster {cl}")
 ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)")
 ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
